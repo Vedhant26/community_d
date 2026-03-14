@@ -5,7 +5,7 @@ import base64
 from typing import Optional, Dict, Any
 
 try:
-    from playwright.async_api import async_playwright
+    from playwright.sync_api import sync_playwright
 except ImportError:
     pass # Wait until it's fully installed
 
@@ -23,7 +23,7 @@ class SandboxResponse(BaseModel):
     risk_score: int
 
 @router.post("/sandbox", response_model=SandboxResponse)
-async def analyze_in_sandbox(req: SandboxRequest):
+def analyze_in_sandbox(req: SandboxRequest):
     """
     Safely open a URL in a headless Chromium browser instance.
     Collect network responses, evaluate DOM heuristics, and capture a screenshot.
@@ -40,17 +40,21 @@ async def analyze_in_sandbox(req: SandboxRequest):
     score = 0
     
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
+        import asyncio
+        import sys
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
                 ignore_https_errors=True,
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
-            page = await context.new_page()
+            page = context.new_page()
 
             # Set a timeout for navigation so it doesn't hang forever
             try:
-                response = await page.goto(target_url, timeout=15000, wait_until="networkidle")
+                response = page.goto(target_url, timeout=15000, wait_until="networkidle")
                 if response:
                     status_code = response.status
             except Exception as e:
@@ -58,16 +62,16 @@ async def analyze_in_sandbox(req: SandboxRequest):
                 pass
             
             # Wait a tiny bit more for obfuscated JS rendering
-            await page.wait_for_timeout(2000)
+            page.wait_for_timeout(2000)
 
             try:
-                title = await page.title()
+                title = page.title()
             except Exception:
                 title = "Unknown (Context Destroyed/Navigating)"
             
             # Evaluate DOM context heuristics safely inside the sandbox
             try:
-                heuristics = await page.evaluate('''() => {
+                heuristics = page.evaluate('''() => {
                     return {
                         forms: document.querySelectorAll("form").length,
                         iframes: document.querySelectorAll("iframe").length,
@@ -86,12 +90,12 @@ async def analyze_in_sandbox(req: SandboxRequest):
 
             # Take screenshot as JPEG
             try:
-                screenshot_bytes = await page.screenshot(type='jpeg', quality=60, full_page=False)
+                screenshot_bytes = page.screenshot(type='jpeg', quality=60, full_page=False)
                 screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
             except Exception:
                 pass
 
-            await browser.close()
+            browser.close()
             
             # Simple heuristic risk scoring
             if has_pwd:
